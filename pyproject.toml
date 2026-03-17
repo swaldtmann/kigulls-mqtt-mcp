@@ -3,7 +3,13 @@ name = "kigulls-mqtt-mcp"
 version = "0.1.0"
 description = "MCP Server fuer MQTT — publish und receive via WebSocket"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "paho-mqtt>=2.0",
+    "mcp[cli]>=1.0",
+]
+
+[project.scripts]
+kigulls-mqtt-mcp = "kigulls_mqtt_mcp:main"
 
 [build-system]
 requires = ["hatchling"]
