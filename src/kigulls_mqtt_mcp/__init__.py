@@ -79,18 +79,19 @@ def _get_client() -> mqtt.Client:
 # --- MCP Tools ---
 
 @mcp.tool()
-def publish(topic: str, message: str) -> str:
+def publish(topic: str, message: str, retain: bool = False) -> str:
     """Publish a message to an MQTT topic.
 
     Args:
         topic: MQTT topic (e.g. kigulls/results/claude)
         message: Message payload (string or JSON)
+        retain: If true, broker stores the message for new subscribers (default: false)
     """
     try:
         client = _get_client()
-        result = client.publish(topic, message)
+        result = client.publish(topic, message, retain=retain)
         result.wait_for_publish(timeout=5)
-        return f"Published to {topic}"
+        return f"Published to {topic}" + (" (retained)" if retain else "")
     except Exception as e:
         return f"Error: {e}"
 
