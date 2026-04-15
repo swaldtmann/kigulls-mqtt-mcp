@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 kigulls-mqtt-mcp = "kigulls_mqtt_mcp:main"
+kigulls-mqtt-channel = "kigulls_mqtt_mcp.channel_server:main"
 
 [build-system]
 requires = ["hatchling"]
