@@ -35,7 +35,20 @@ from mcp.types import JSONRPCMessage, JSONRPCNotification, ServerCapabilities
 
 from ._mqtt_client import build_client, connect_blocking
 
-ROOM = os.environ.get("KIGULLS_ROOM", "werkstatt")
+KNOWN_ROOMS = {"werkstatt", "ideenschmiede", "eule", "privat", "arsenal", "garten"}
+
+
+def _detect_room() -> str:
+    env_room = os.environ.get("KIGULLS_ROOM")
+    if env_room:
+        return env_room
+    cwd_base = os.path.basename(os.getcwd())
+    if cwd_base in KNOWN_ROOMS:
+        return cwd_base
+    return "werkstatt"
+
+
+ROOM = _detect_room()
 
 
 def default_topics() -> list[str]:
