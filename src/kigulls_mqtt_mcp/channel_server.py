@@ -19,10 +19,10 @@ Channel-specific:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import queue
-import threading
 from datetime import UTC, datetime
 from typing import Any
 
@@ -72,6 +72,44 @@ def normalize_topic(topic: str) -> str:
         else:
             out.append("_")
     return "".join(out)
+
+
+# In-Memory Dedup-State: (topic, payload-hash) je Session.
+# Verhindert Retained-Flood bei Reconnect und doppelte Pirol/Agent-Results.
+_seen_keys: set[str] = set()
+
+
+def should_drop(msg: mqtt.MQTTMessage) -> tuple[bool, str]:
+    """Entscheidet ob eine MQTT-Message vor der Notification gedroppt wird.
+
+    Regeln (signalarm halten, Rauschen aussperren):
+    - Lotse-Routing-Decisions sind reine Infrastruktur-Echos -> drop
+    - Topic+Payload-Hash bereits gesehen -> drop (Retained-Flood, Dupes)
+
+    Eskalationen, Digests (je digest_nr einmal), Messages an den Raum und
+    frische Agent-Results (Reggi/Byrd/Eva/Eule/Pirol/...) kommen durch.
+    """
+    try:
+        payload_text = msg.payload.decode("utf-8")
+    except UnicodeDecodeError:
+        return False, ""
+
+    parsed: dict[str, Any] = {}
+    try:
+        p = json.loads(payload_text)
+        if isinstance(p, dict):
+            parsed = p
+    except json.JSONDecodeError:
+        pass
+
+    if msg.topic == "kigulls/results/lotse" and parsed.get("event") == "routing-decision":
+        return True, "lotse routing-decision"
+
+    key = f"{msg.topic}|{hashlib.sha256(payload_text.encode('utf-8')).hexdigest()}"
+    if key in _seen_keys:
+        return True, "duplicate"
+    _seen_keys.add(key)
+    return False, ""
 
 
 def build_channel_params(msg: mqtt.MQTTMessage) -> dict[str, Any]:
@@ -145,6 +183,10 @@ async def run() -> None:
             while True:
                 try:
                     msg: mqtt.MQTTMessage = await loop.run_in_executor(None, mqtt_queue.get)
+                    drop, reason = should_drop(msg)
+                    if drop:
+                        print(f"channel filter drop: {msg.topic} ({reason})", file=sys.stderr)
+                        continue
                     params = build_channel_params(msg)
                     notif = JSONRPCNotification(
                         jsonrpc="2.0",
