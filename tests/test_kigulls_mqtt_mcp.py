@@ -34,7 +34,7 @@ class TestPublish:
             result = publish("kigulls/test", '{"msg": "hello"}')
 
         assert "Published to kigulls/test" in result
-        mock_client.publish.assert_called_once_with("kigulls/test", '{"msg": "hello"}')
+        mock_client.publish.assert_called_once_with("kigulls/test", '{"msg": "hello"}', retain=False)
 
     def test_publish_error(self):
         from kigulls_mqtt_mcp import publish
