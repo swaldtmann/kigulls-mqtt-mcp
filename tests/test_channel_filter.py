@@ -72,3 +72,35 @@ def test_non_json_payload_passes():
     channel_server._seen_keys.clear()
     drop, _ = channel_server.should_drop(_msg("kigulls/messages/ideenschmiede", "plain text"))
     assert drop is False
+
+
+def test_self_echo_dropped(monkeypatch):
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    monkeypatch.setattr(channel_server, "ROOM", "byrd")
+    drop, reason = channel_server.should_drop(
+        _msg("kigulls/results/byrd", {"agent": "byrd", "session": "S292", "summary": "done"})
+    )
+    assert drop is True
+    assert "self-echo" in reason
+
+
+def test_foreign_agent_not_self_echo(monkeypatch):
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    monkeypatch.setattr(channel_server, "ROOM", "byrd")
+    drop, _ = channel_server.should_drop(
+        _msg("kigulls/results/reggi", {"agent": "reggi", "session": "S299"})
+    )
+    assert drop is False
+
+
+def test_self_echo_requires_agent_field(monkeypatch):
+    """Payload ohne agent-Feld darf nicht als self-echo gedroppt werden."""
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    monkeypatch.setattr(channel_server, "ROOM", "byrd")
+    drop, _ = channel_server.should_drop(
+        _msg("kigulls/results/byrd", {"event": "something", "value": 42})
+    )
+    assert drop is False

@@ -35,7 +35,17 @@ from mcp.types import JSONRPCMessage, JSONRPCNotification, ServerCapabilities
 
 from ._mqtt_client import build_client, connect_blocking
 
-KNOWN_ROOMS = {"werkstatt", "ideenschmiede", "eule", "privat", "arsenal", "garten"}
+KNOWN_ROOMS = {
+    "werkstatt",
+    "ideenschmiede",
+    "eule",
+    "privat",
+    "arsenal",
+    "garten",
+    "byrd",
+    "reggi",
+    "eva",
+}
 
 
 def _detect_room() -> str:
@@ -105,11 +115,41 @@ def should_drop(msg: mqtt.MQTTMessage) -> tuple[bool, str]:
     if msg.topic == "kigulls/results/lotse" and parsed.get("event") == "routing-decision":
         return True, "lotse routing-decision"
 
+    if msg.topic.startswith("kigulls/results/") and parsed.get("agent") == ROOM:
+        return True, "self-echo"
+
     key = f"{msg.topic}|{hashlib.sha256(payload_text.encode('utf-8')).hexdigest()}"
     if key in _seen_keys:
         return True, "duplicate"
     _seen_keys.add(key)
     return False, ""
+
+
+def _truncate_summary(text: str, max_len: int = 120) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
+def build_results_header(topic: str, parsed: dict[str, Any]) -> str:
+    """Kompakte Header-Zeile fuer kigulls/results/# statt Volltext-Push.
+
+    Spart Tokens in Cross-Room-Awareness: Topic, Agent, Session, erste 120ch
+    von summary/event. Volltext abrufbar via get_message/list_results im
+    kigulls-mqtt MCP.
+    """
+    agent = str(parsed.get("agent") or parsed.get("source") or "unknown")
+    session = parsed.get("session")
+    summary = parsed.get("summary") or parsed.get("event") or ""
+    summary_str = str(summary) if summary else ""
+
+    head = f"[{topic}] {agent}"
+    if session:
+        head += f" {session}"
+    if summary_str:
+        head += f' — "{_truncate_summary(summary_str)}"'
+    head += " [list_results/get_message fuer Volltext]"
+    return head
 
 
 def build_channel_params(msg: mqtt.MQTTMessage) -> dict[str, Any]:
@@ -118,17 +158,24 @@ def build_channel_params(msg: mqtt.MQTTMessage) -> dict[str, Any]:
     except UnicodeDecodeError:
         payload = repr(msg.payload)
 
-    # Try to parse payload as JSON to extract a source field (agent/room name)
+    parsed: dict[str, Any] = {}
     source = ROOM
     try:
-        parsed = json.loads(payload)
-        if isinstance(parsed, dict):
-            source = str(parsed.get("agent") or parsed.get("source") or ROOM)
+        p = json.loads(payload)
+        if isinstance(p, dict):
+            parsed = p
+            source = str(p.get("agent") or p.get("source") or ROOM)
     except (json.JSONDecodeError, TypeError):
         pass
 
+    mode = os.environ.get("KIGULLS_CHANNEL_RESULTS_MODE", "header").lower()
+    if mode == "header" and msg.topic.startswith("kigulls/results/") and parsed:
+        content = build_results_header(msg.topic, parsed)
+    else:
+        content = f"[{msg.topic}] {payload}"
+
     return {
-        "content": f"[{msg.topic}] {payload}",
+        "content": content,
         "meta": {
             "topic_normalized": normalize_topic(msg.topic),
             "source": source,
@@ -162,7 +209,7 @@ async def run() -> None:
     async with stdio_server() as (read_stream, write_stream):
         init_options = InitializationOptions(
             server_name="kigulls-mqtt-channel",
-            server_version="0.3.0",
+            server_version="0.3.1",
             capabilities=caps,
             instructions=(
                 "MQTT-Nachrichten vom KIgulls-Schwarm kommen als "

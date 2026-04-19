@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-19
+
+### Added
+- **Header-only Mode fuer `kigulls/results/#`.** Statt Volltext-Payload
+  wird ein kompakter Header gepusht: Topic, agent, session, erste 120 Zeichen
+  der `summary` (oder `event` als Fallback), plus Hinweis auf
+  `list_results`/`get_message` fuer Volltext. Spart pro Cross-Room-Result
+  ~80% Tokens bei erhaltener Awareness. Env-Var
+  `KIGULLS_CHANNEL_RESULTS_MODE=header|full` (default `header`) schaltet
+  zurueck auf Volltext falls noetig.
+- **Self-Echo-Drop.** Results, deren `agent`-Feld dem eigenen `ROOM`
+  entspricht, werden vor dem Push gedroppt (Reason: `self-echo`). Verhindert
+  dass eine Persona ihre eigenen Publishes als `<channel>`-Notification
+  zurueckbekommt. Trifft nur `kigulls/results/#` und nur Payloads mit
+  `agent`-Feld (raw strings / andere Schemas bleiben unberuehrt).
+- `KNOWN_ROOMS` um Persona-Namen (`byrd`, `reggi`, `eva`) erweitert.
+  Ohne das fiel `_detect_room()` in Persona-Sessions auf `werkstatt`
+  zurueck und der Self-Echo-Drop haette nie gegriffen.
+
+### Tests
+- `tests/test_channel_filter.py` + 3 Faelle (self-echo, foreign-agent,
+  missing-agent-field).
+- `tests/test_channel_header.py` neu (8 Faelle: header-build, 120ch-trunc,
+  escalation-voll, direct-message-voll, digest-voll, env-var-full,
+  raw-string-fallback, header-ohne-session).
+
 ## [0.3.0] - 2026-04-18
 
 ### Added
