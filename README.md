@@ -41,3 +41,21 @@ als Volltext durch.
 Results mit `agent == $ROOM` werden vor dem Push gedroppt — eine Persona
 bekommt ihre eigenen `publish`-Calls nicht als Channel-Notification zurueck.
 Betrifft nur `kigulls/results/#` und nur Payloads mit `agent`-Feld.
+
+## Development
+
+### Setup
+
+```bash
+uv sync --group dev
+uv run pre-commit install
+```
+
+### Pre-commit
+
+Ein lokaler Hook (`uv lock --check`) blockt Commits wenn `uv.lock` nicht zu
+`pyproject.toml` passt. Triggert nur wenn eines der beiden Files im Commit
+liegt.
+
+Hintergrund: v0.3.0 wurde mit `uv.lock` auf version 0.2.0 released
+(AFKI-W-042). Der Hook faengt das symptomatisch-strukturell ab.

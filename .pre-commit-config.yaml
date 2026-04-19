@@ -1,0 +1,9 @@
+repos:
+  - repo: local
+    hooks:
+      - id: uv-lock-check
+        name: uv lock consistency (pyproject.toml ↔ uv.lock)
+        entry: uv lock --check
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
