@@ -14,6 +14,12 @@ Channel-specific:
     KIGULLS_CHANNEL_TOPICS   — Comma-separated override of the default
                                allowlist (default: results, escalation,
                                digest, messages/<room>)
+    KIGULLS_CHANNEL_DENY_AGENTS
+                             — Comma-separated list of agent names whose
+                               result-like messages are dropped before
+                               the room sees them. Per-room scalpel on top
+                               of the W-069 topic split (e.g. Byrd does
+                               not want Pirol news firehose).
 """
 
 from __future__ import annotations
@@ -95,6 +101,16 @@ def normalize_topic(topic: str) -> str:
 _seen_keys: set[str] = set()
 
 
+def _deny_agents() -> frozenset[str]:
+    """AFKI-W-064: per-room agent deny-list for result-like topics.
+
+    Read fresh on each should_drop call so test suites can flip the env
+    without reimporting. Empty list = no filtering (default).
+    """
+    raw = os.environ.get("KIGULLS_CHANNEL_DENY_AGENTS", "")
+    return frozenset(a.strip() for a in raw.split(",") if a.strip())
+
+
 def should_drop(msg: mqtt.MQTTMessage) -> tuple[bool, str]:
     """Entscheidet ob eine MQTT-Message vor der Notification gedroppt wird.
 
@@ -124,13 +140,21 @@ def should_drop(msg: mqtt.MQTTMessage) -> tuple[bool, str]:
             and parsed.get("event") == "routing-decision":
         return True, "lotse routing-decision"
 
-    if (
+    is_result_topic = (
         msg.topic.startswith("kigulls/results/")
         or msg.topic.startswith("kigulls/service/")
         or msg.topic.startswith("kigulls/personas/")
         or msg.topic.startswith("kigulls/agents/")
-    ) and parsed.get("agent") == ROOM:
+    )
+
+    if is_result_topic and parsed.get("agent") == ROOM:
         return True, "self-echo"
+
+    # AFKI-W-064: per-room agent deny-list.
+    if is_result_topic:
+        deny = _deny_agents()
+        if deny and parsed.get("agent") in deny:
+            return True, "agent-deny"
 
     key = f"{msg.topic}|{hashlib.sha256(payload_text.encode('utf-8')).hexdigest()}"
     if key in _seen_keys:

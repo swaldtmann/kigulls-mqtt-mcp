@@ -104,3 +104,64 @@ def test_self_echo_requires_agent_field(monkeypatch):
         _msg("kigulls/results/byrd", {"event": "something", "value": 42})
     )
     assert drop is False
+
+
+# --- AFKI-W-064: KIGULLS_CHANNEL_DENY_AGENTS -------------------------------
+
+
+def test_deny_agent_dropped_on_service_topic(monkeypatch):
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    monkeypatch.setattr(channel_server, "ROOM", "byrd")
+    monkeypatch.setenv("KIGULLS_CHANNEL_DENY_AGENTS", "pirol,pelikan")
+    drop, reason = channel_server.should_drop(
+        _msg("kigulls/service/pirol", {"agent": "pirol", "summary": "news"})
+    )
+    assert drop is True
+    assert reason == "agent-deny"
+
+
+def test_deny_agent_also_applies_to_legacy_results(monkeypatch):
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    monkeypatch.setattr(channel_server, "ROOM", "byrd")
+    monkeypatch.setenv("KIGULLS_CHANNEL_DENY_AGENTS", "pirol")
+    drop, reason = channel_server.should_drop(
+        _msg("kigulls/results/pirol", {"agent": "pirol"})
+    )
+    assert drop is True
+    assert reason == "agent-deny"
+
+
+def test_deny_agent_does_not_touch_escalations(monkeypatch):
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    monkeypatch.setattr(channel_server, "ROOM", "byrd")
+    monkeypatch.setenv("KIGULLS_CHANNEL_DENY_AGENTS", "pirol")
+    # Escalations must always come through even from denied agents.
+    drop, _ = channel_server.should_drop(
+        _msg("kigulls/escalation/pirol", {"agent": "pirol", "severity": "high"})
+    )
+    assert drop is False
+
+
+def test_deny_list_empty_is_noop(monkeypatch):
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    monkeypatch.setattr(channel_server, "ROOM", "byrd")
+    monkeypatch.delenv("KIGULLS_CHANNEL_DENY_AGENTS", raising=False)
+    drop, _ = channel_server.should_drop(
+        _msg("kigulls/service/pirol", {"agent": "pirol"})
+    )
+    assert drop is False
+
+
+def test_deny_other_agent_still_passes(monkeypatch):
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    monkeypatch.setattr(channel_server, "ROOM", "byrd")
+    monkeypatch.setenv("KIGULLS_CHANNEL_DENY_AGENTS", "pirol")
+    drop, _ = channel_server.should_drop(
+        _msg("kigulls/personas/reggi", {"agent": "reggi", "session": "S310"})
+    )
+    assert drop is False
