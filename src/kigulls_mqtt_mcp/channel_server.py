@@ -65,8 +65,14 @@ def default_topics() -> list[str]:
     override = os.environ.get("KIGULLS_CHANNEL_TOPICS")
     if override:
         return [t.strip() for t in override.split(",") if t.strip()]
+    # AFKI-W-069: results/# stays as legacy fallback. New traffic lives in
+    # service/<daemon>, personas/<raum>, agents/<rolle>. personas covers peer
+    # awareness; agents covers RRT outputs; service covers daemon telemetry.
     return [
         "kigulls/results/#",
+        "kigulls/service/#",
+        "kigulls/personas/#",
+        "kigulls/agents/#",
         "kigulls/escalation/#",
         "kigulls/digest",
         f"kigulls/messages/{ROOM}",
@@ -112,10 +118,18 @@ def should_drop(msg: mqtt.MQTTMessage) -> tuple[bool, str]:
     except json.JSONDecodeError:
         pass
 
-    if msg.topic == "kigulls/results/lotse" and parsed.get("event") == "routing-decision":
+    # AFKI-W-069: Lotse now publishes routing decisions on service/lotse.
+    # Keep results/lotse matcher during legacy window.
+    if msg.topic in ("kigulls/service/lotse", "kigulls/results/lotse") \
+            and parsed.get("event") == "routing-decision":
         return True, "lotse routing-decision"
 
-    if msg.topic.startswith("kigulls/results/") and parsed.get("agent") == ROOM:
+    if (
+        msg.topic.startswith("kigulls/results/")
+        or msg.topic.startswith("kigulls/service/")
+        or msg.topic.startswith("kigulls/personas/")
+        or msg.topic.startswith("kigulls/agents/")
+    ) and parsed.get("agent") == ROOM:
         return True, "self-echo"
 
     key = f"{msg.topic}|{hashlib.sha256(payload_text.encode('utf-8')).hexdigest()}"
@@ -169,7 +183,13 @@ def build_channel_params(msg: mqtt.MQTTMessage) -> dict[str, Any]:
         pass
 
     mode = os.environ.get("KIGULLS_CHANNEL_RESULTS_MODE", "header").lower()
-    if mode == "header" and msg.topic.startswith("kigulls/results/") and parsed:
+    is_result_topic = (
+        msg.topic.startswith("kigulls/results/")
+        or msg.topic.startswith("kigulls/service/")
+        or msg.topic.startswith("kigulls/personas/")
+        or msg.topic.startswith("kigulls/agents/")
+    )
+    if mode == "header" and is_result_topic and parsed:
         content = build_results_header(msg.topic, parsed)
     else:
         content = f"[{msg.topic}] {payload}"
