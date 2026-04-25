@@ -27,9 +27,11 @@ def test_werkstatt_alias_matches_byrd(cs):
            set(cs.default_topics("byrd")) - {"kigulls/messages/byrd"}
 
 
-def test_reggi_profile_excludes_service(cs):
+def test_reggi_profile_includes_pirol_excludes_other_service(cs):
+    """Reggi is the curator for Pirol news; other service/* topics stay out."""
     t = cs.default_topics("reggi")
     assert "kigulls/service/#" not in t
+    assert "kigulls/service/pirol" in t
     assert "kigulls/personas/#" in t
     assert "kigulls/agents/#" in t
     assert "kigulls/escalation/#" in t

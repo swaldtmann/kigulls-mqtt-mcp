@@ -79,7 +79,7 @@ ROOM_ALIASES = {
 }
 ROOM_PROFILES: dict[str, list[str]] = {
     "werkstatt":     ["kigulls/service/#", "kigulls/personas/#", "kigulls/escalation/#"],
-    "ideenschmiede": ["kigulls/personas/#", "kigulls/agents/#",   "kigulls/escalation/#"],
+    "ideenschmiede": ["kigulls/personas/#", "kigulls/agents/#",   "kigulls/escalation/#", "kigulls/service/pirol"],
     "arsenal":       ["kigulls/personas/#"],
     "privat":        [],
     "garten":        ["kigulls/personas/#"],
