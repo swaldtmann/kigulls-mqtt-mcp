@@ -67,22 +67,51 @@ def _detect_room() -> str:
 ROOM = _detect_room()
 
 
-def default_topics() -> list[str]:
+# AFKI-W-073: per-room subscribe profiles. W-069 split publishers into
+# service/<daemon>, personas/<raum>, agents/<rolle>. This restricts each
+# room's subscription to namespaces that are useful for its purpose.
+# `kigulls/digest` and `kigulls/messages/<room>` are always added.
+ROOM_ALIASES = {
+    "byrd": "werkstatt",
+    "reggi": "ideenschmiede",
+    "eva": "arsenal",
+    "hanne": "privat",
+}
+ROOM_PROFILES: dict[str, list[str]] = {
+    "werkstatt":     ["kigulls/service/#", "kigulls/personas/#", "kigulls/escalation/#"],
+    "ideenschmiede": ["kigulls/personas/#", "kigulls/agents/#",   "kigulls/escalation/#"],
+    "arsenal":       ["kigulls/personas/#"],
+    "privat":        [],
+    "garten":        ["kigulls/personas/#"],
+    "eule":          ["kigulls/service/#", "kigulls/agents/#",    "kigulls/escalation/#"],
+}
+# Fallback profile for unknown rooms — keep the broad pre-W-073 behaviour
+# so a misconfigured ROOM doesn't go silent.
+_FALLBACK_PROFILE = [
+    "kigulls/service/#",
+    "kigulls/personas/#",
+    "kigulls/agents/#",
+    "kigulls/escalation/#",
+]
+
+
+def _legacy_results_enabled() -> bool:
+    return os.environ.get("KIGULLS_CHANNEL_LEGACY_RESULTS", "1") not in ("0", "false", "no")
+
+
+def default_topics(room: str | None = None) -> list[str]:
     override = os.environ.get("KIGULLS_CHANNEL_TOPICS")
     if override:
         return [t.strip() for t in override.split(",") if t.strip()]
-    # AFKI-W-069: results/# stays as legacy fallback. New traffic lives in
-    # service/<daemon>, personas/<raum>, agents/<rolle>. personas covers peer
-    # awareness; agents covers RRT outputs; service covers daemon telemetry.
-    return [
-        "kigulls/results/#",
-        "kigulls/service/#",
-        "kigulls/personas/#",
-        "kigulls/agents/#",
-        "kigulls/escalation/#",
-        "kigulls/digest",
-        f"kigulls/messages/{ROOM}",
-    ]
+    r = room if room is not None else ROOM
+    profile_key = ROOM_ALIASES.get(r, r)
+    profile = ROOM_PROFILES.get(profile_key, _FALLBACK_PROFILE)
+    topics: list[str] = list(profile)
+    if _legacy_results_enabled():
+        topics.append("kigulls/results/#")
+    topics.append("kigulls/digest")
+    topics.append(f"kigulls/messages/{r}")
+    return topics
 
 
 def normalize_topic(topic: str) -> str:
