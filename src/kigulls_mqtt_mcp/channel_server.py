@@ -29,6 +29,7 @@ import hashlib
 import json
 import os
 import queue
+import sys
 from datetime import UTC, datetime
 from typing import Any
 
@@ -38,6 +39,11 @@ from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification, ServerCapabilities
+
+try:  # AFKI-W-074/W-082: persist dedup keys across MCP restarts.
+    import redis as _redis
+except ImportError:  # pragma: no cover — fallback when redis-py is not installed
+    _redis = None  # type: ignore[assignment]
 
 from ._mqtt_client import build_client, connect_blocking
 
@@ -125,9 +131,114 @@ def normalize_topic(topic: str) -> str:
     return "".join(out)
 
 
-# In-Memory Dedup-State: (topic, payload-hash) je Session.
-# Verhindert Retained-Flood bei Reconnect und doppelte Pirol/Agent-Results.
+# Dedup-State: (topic, payload-hash) keys.
+# Primary store is Valkey (persistent across MCP restarts, AFKI-W-074/W-082);
+# falls back to this in-memory set when Valkey is unreachable. The TTL is
+# short (default 1h) — purpose is reconnect-burst dampening, not
+# content-dedup (W-071 covers that on the publisher side).
 _seen_keys: set[str] = set()
+
+DEDUP_KEY_PREFIX = "kigulls:channel:dedup:"
+_DEFAULT_VALKEY_URL = "redis://valkey.kigulls.dev:6379"
+
+
+def _dedup_ttl() -> int:
+    """TTL in seconds. Read fresh so tests can flip it without reimport."""
+    raw = os.environ.get("KIGULLS_CHANNEL_DEDUP_TTL", "3600")
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 3600
+
+
+def _dedup_disabled() -> bool:
+    return os.environ.get("KIGULLS_CHANNEL_DEDUP_DISABLE", "").lower() in (
+        "1", "true", "yes",
+    )
+
+
+_dedup_client: Any | None = None
+_dedup_unavailable_logged = False
+
+
+def _get_dedup_client() -> Any | None:
+    """Lazy-init a sync Valkey client. Returns None if disabled or unreachable.
+
+    Using sync redis (not asyncio) because the call site `should_drop` is sync
+    and runs inside the asyncio pump. Sub-millisecond on local network — short
+    `socket_*timeout` keeps us off the event-loop floor when Valkey is gone.
+    """
+    global _dedup_client, _dedup_unavailable_logged
+    if _dedup_disabled() or _redis is None:
+        return None
+    if _dedup_client is not None:
+        return _dedup_client
+    url = os.environ.get("VALKEY_URL", _DEFAULT_VALKEY_URL)
+    try:
+        client = _redis.Redis.from_url(  # type: ignore[union-attr]
+            url,
+            decode_responses=True,
+            socket_connect_timeout=0.5,
+            socket_timeout=0.5,
+        )
+        client.ping()
+        _dedup_client = client
+        if _dedup_unavailable_logged:
+            print(
+                "[channel_server] Valkey dedup back online",
+                file=sys.stderr, flush=True,
+            )
+            _dedup_unavailable_logged = False
+        return client
+    except Exception as e:  # noqa: BLE001
+        if not _dedup_unavailable_logged:
+            print(
+                f"[channel_server] Valkey dedup unavailable ({e}); "
+                "falling back to in-memory _seen_keys (W-074/W-082)",
+                file=sys.stderr, flush=True,
+            )
+            _dedup_unavailable_logged = True
+        _dedup_client = None
+        return None
+
+
+def _dedup_check_and_mark(key: str) -> bool:
+    """Return True if `key` was already seen (and thus should be dropped).
+
+    Atomic check-and-set against Valkey via SET NX EX. Falls back to the
+    in-memory `_seen_keys` set on Valkey errors so the channel pump never
+    blocks on broker outages.
+    """
+    client = _get_dedup_client()
+    if client is not None:
+        try:
+            res = client.set(
+                DEDUP_KEY_PREFIX + key, "1", nx=True, ex=_dedup_ttl(),
+            )
+            # SET NX returns True (set) on first time, None on duplicate.
+            return not bool(res)
+        except Exception as e:  # noqa: BLE001
+            global _dedup_client, _dedup_unavailable_logged
+            _dedup_client = None
+            if not _dedup_unavailable_logged:
+                print(
+                    f"[channel_server] Valkey dedup error ({e}); "
+                    "falling back to in-memory _seen_keys",
+                    file=sys.stderr, flush=True,
+                )
+                _dedup_unavailable_logged = True
+    if key in _seen_keys:
+        return True
+    _seen_keys.add(key)
+    return False
+
+
+def _dedup_reset() -> None:
+    """Test-helper: drop the lazy client + clear in-memory set."""
+    global _dedup_client, _dedup_unavailable_logged
+    _dedup_client = None
+    _dedup_unavailable_logged = False
+    _seen_keys.clear()
 
 
 def _deny_agents() -> frozenset[str]:
@@ -185,10 +296,11 @@ def should_drop(msg: mqtt.MQTTMessage) -> tuple[bool, str]:
         if deny and parsed.get("agent") in deny:
             return True, "agent-deny"
 
-    key = f"{msg.topic}|{hashlib.sha256(payload_text.encode('utf-8')).hexdigest()}"
-    if key in _seen_keys:
+    raw_key = f"{msg.topic}|{hashlib.sha256(payload_text.encode('utf-8')).hexdigest()}"
+    # Hash the composite to keep Valkey keys short + uniform.
+    key = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    if _dedup_check_and_mark(key):
         return True, "duplicate"
-    _seen_keys.add(key)
     return False, ""
 
 
