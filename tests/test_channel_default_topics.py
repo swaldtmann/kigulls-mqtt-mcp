@@ -27,11 +27,18 @@ def test_werkstatt_alias_matches_byrd(cs):
            set(cs.default_topics("byrd")) - {"kigulls/messages/byrd"}
 
 
-def test_reggi_profile_includes_pirol_excludes_other_service(cs):
-    """Reggi is the curator for Pirol news; other service/* topics stay out."""
+def test_reggi_profile_includes_pirol_and_pelikan_excludes_other_service(cs):
+    """Reggi is the curator for Pirol news + Pelikan summaries; other service/* stays out.
+
+    AFKI-W-091/W-084b (S316d): Pelikan-Service kam zur expliziten Whitelist
+    dazu. Restliche Service-Daemons (Lotse, Scribe, Eule, Specht) bleiben
+    fuer Reggis Channel ausgeblendet — die geben nur Telemetrie ab, kein
+    Material fuer Lead-Reflexion.
+    """
     t = cs.default_topics("reggi")
     assert "kigulls/service/#" not in t
     assert "kigulls/service/pirol" in t
+    assert "kigulls/service/pelikan" in t
     assert "kigulls/personas/#" in t
     assert "kigulls/agents/#" in t
     assert "kigulls/escalation/#" in t
@@ -48,19 +55,24 @@ def test_ideenschmiede_alias(cs):
     assert set(a) - {a_room} == set(b) - {b_room}
 
 
-def test_eva_profile_minimal_swarm(cs):
+def test_eva_profile_only_digest_and_messages(cs):
+    """AFKI-W-091/W-084b: Eva ist Schwarm-frei (Reflexionsraum), nur digest + direct messages."""
     t = cs.default_topics("eva")
-    assert "kigulls/personas/#" in t
-    assert "kigulls/service/#" not in t
-    assert "kigulls/agents/#" not in t
-    assert "kigulls/escalation/#" not in t
-    assert "kigulls/digest" in t
+    expected = {"kigulls/digest", "kigulls/messages/eva"}
+    assert set(t) == expected
 
 
 def test_privat_profile_only_digest_and_messages(cs):
     """AFKI-W-091: legacy results/# ist Default-aus, privat sieht jetzt nur das Notwendigste."""
     t = cs.default_topics("privat")
     expected = {"kigulls/digest", "kigulls/messages/privat"}
+    assert set(t) == expected
+
+
+def test_garten_profile_only_digest_and_messages(cs):
+    """AFKI-W-091/W-084b: Garten ist Reflexionsraum — kein Schwarm-Sichtfenster."""
+    t = cs.default_topics("garten")
+    expected = {"kigulls/digest", "kigulls/messages/garten"}
     assert set(t) == expected
 
 

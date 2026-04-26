@@ -85,10 +85,15 @@ ROOM_ALIASES = {
 }
 ROOM_PROFILES: dict[str, list[str]] = {
     "werkstatt":     ["kigulls/service/#", "kigulls/personas/#", "kigulls/escalation/#"],
-    "ideenschmiede": ["kigulls/personas/#", "kigulls/agents/#",   "kigulls/escalation/#", "kigulls/service/pirol"],
-    "arsenal":       ["kigulls/personas/#"],
+    "ideenschmiede": ["kigulls/personas/#", "kigulls/agents/#",   "kigulls/escalation/#", "kigulls/service/pirol", "kigulls/service/pelikan"],
+    # AFKI-W-091/W-084b (S316d): Eva (Arsenal), Privat und Garten sind
+    # Schwarm-frei — Reflexions-/Werkraeume ohne Live-Channel-Sichtfenster.
+    # zshrc startet den kigulls-mqtt-channel fuer diese Raeume nicht, der
+    # leere Profile-Eintrag haelt den Code konsistent falls jemand den
+    # Channel-Server doch manuell mit KIGULLS_ROOM=arsenal startet.
+    "arsenal":       [],
     "privat":        [],
-    "garten":        ["kigulls/personas/#"],
+    "garten":        [],
     "eule":          ["kigulls/service/#", "kigulls/agents/#",    "kigulls/escalation/#"],
 }
 # Fallback profile for unknown rooms — keep the broad pre-W-073 behaviour
