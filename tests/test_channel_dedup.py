@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock
 
-import pytest
-
 
 def _msg(topic: str, payload: dict) -> MagicMock:
     m = MagicMock()

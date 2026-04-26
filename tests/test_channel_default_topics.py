@@ -58,9 +58,9 @@ def test_eva_profile_minimal_swarm(cs):
 
 
 def test_privat_profile_only_digest_and_messages(cs):
+    """AFKI-W-091: legacy results/# ist Default-aus, privat sieht jetzt nur das Notwendigste."""
     t = cs.default_topics("privat")
-    expected = {"kigulls/results/#", "kigulls/digest", "kigulls/messages/privat"}
-    # legacy results/# is on by default
+    expected = {"kigulls/digest", "kigulls/messages/privat"}
     assert set(t) == expected
 
 
@@ -84,12 +84,20 @@ def test_env_override_wins(cs, monkeypatch):
     assert t == ["kigulls/foo", "kigulls/bar"]
 
 
-def test_legacy_results_disabled(cs, monkeypatch):
+def test_legacy_results_disabled_explicitly(cs, monkeypatch):
     monkeypatch.setenv("KIGULLS_CHANNEL_LEGACY_RESULTS", "0")
     t = cs.default_topics("byrd")
     assert "kigulls/results/#" not in t
 
 
-def test_legacy_results_default_on(cs):
+def test_legacy_results_default_off(cs):
+    """AFKI-W-091: Default ist "0" — alle Publisher auf W-069-Namespaces migriert."""
+    t = cs.default_topics("byrd")
+    assert "kigulls/results/#" not in t
+
+
+def test_legacy_results_re_enabled_via_env(cs, monkeypatch):
+    """Notbremse-Pfad: Env=1 holt Legacy-Subscribe zurueck."""
+    monkeypatch.setenv("KIGULLS_CHANNEL_LEGACY_RESULTS", "1")
     t = cs.default_topics("byrd")
     assert "kigulls/results/#" in t

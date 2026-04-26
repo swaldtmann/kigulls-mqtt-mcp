@@ -102,7 +102,11 @@ _FALLBACK_PROFILE = [
 
 
 def _legacy_results_enabled() -> bool:
-    return os.environ.get("KIGULLS_CHANNEL_LEGACY_RESULTS", "1") not in ("0", "false", "no")
+    # AFKI-W-091: default flipped to "0" — alle Publisher migriert auf
+    # service/personas/agents (W-069). `KIGULLS_CHANNEL_LEGACY_RESULTS=1` bleibt
+    # als manuelle Notbremse falls eine Quelle uebersehen wurde, wird in der
+    # Beobachtungswoche entweder bestaetigt oder W-091-Cleanup raeumt das Env weg.
+    return os.environ.get("KIGULLS_CHANNEL_LEGACY_RESULTS", "0") not in ("0", "false", "no")
 
 
 def default_topics(room: str | None = None) -> list[str]:
