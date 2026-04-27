@@ -19,12 +19,20 @@ def test_byrd_profile(cs):
     assert "kigulls/escalation/#" in t
     assert "kigulls/agents/#" not in t
     assert "kigulls/digest" in t
-    assert "kigulls/messages/byrd" in t
 
 
 def test_werkstatt_alias_matches_byrd(cs):
-    assert set(cs.default_topics("werkstatt")) - {"kigulls/messages/werkstatt"} == \
-           set(cs.default_topics("byrd")) - {"kigulls/messages/byrd"}
+    assert set(cs.default_topics("werkstatt")) == set(cs.default_topics("byrd"))
+
+
+def test_no_room_messages_subscribe(cs):
+    """AFKI-W-093 (S317b): kigulls/messages/<room> wird nicht mehr subscribed —
+    redundant zu Auftrag/Handover/personas, und der Subscribe-Filter `messages/{r}`
+    ohne Wildcard hat den Publisher-Pfad `messages/<from>/<to>` nie gematcht."""
+    for room in ("byrd", "reggi", "eva", "privat", "garten", "eule", "unknownroom"):
+        t = cs.default_topics(room)
+        assert not any(top.startswith("kigulls/messages/") for top in t), \
+            f"messages/* subscribe leaked into {room}: {t}"
 
 
 def test_reggi_profile_includes_pirol_and_pelikan_excludes_other_service(cs):
@@ -45,35 +53,26 @@ def test_reggi_profile_includes_pirol_and_pelikan_excludes_other_service(cs):
 
 
 def test_ideenschmiede_alias(cs):
-    a = cs.default_topics("ideenschmiede")
-    b = cs.default_topics("reggi")
-    # Identical except for the messages/<room> entry.
-    a_room = next(t for t in a if t.startswith("kigulls/messages/"))
-    b_room = next(t for t in b if t.startswith("kigulls/messages/"))
-    assert a_room == "kigulls/messages/ideenschmiede"
-    assert b_room == "kigulls/messages/reggi"
-    assert set(a) - {a_room} == set(b) - {b_room}
+    """AFKI-W-093: alias and target room produce identical subscribe sets."""
+    assert set(cs.default_topics("ideenschmiede")) == set(cs.default_topics("reggi"))
 
 
-def test_eva_profile_only_digest_and_messages(cs):
-    """AFKI-W-091/W-084b: Eva ist Schwarm-frei (Reflexionsraum), nur digest + direct messages."""
+def test_eva_profile_only_digest(cs):
+    """AFKI-W-091/W-084b: Eva ist Schwarm-frei (Reflexionsraum). W-093: kein messages/* mehr."""
     t = cs.default_topics("eva")
-    expected = {"kigulls/digest", "kigulls/messages/eva"}
-    assert set(t) == expected
+    assert set(t) == {"kigulls/digest"}
 
 
-def test_privat_profile_only_digest_and_messages(cs):
-    """AFKI-W-091: legacy results/# ist Default-aus, privat sieht jetzt nur das Notwendigste."""
+def test_privat_profile_only_digest(cs):
+    """AFKI-W-091/W-093: legacy results/# default-aus, kein messages/* — privat sieht nur digest."""
     t = cs.default_topics("privat")
-    expected = {"kigulls/digest", "kigulls/messages/privat"}
-    assert set(t) == expected
+    assert set(t) == {"kigulls/digest"}
 
 
-def test_garten_profile_only_digest_and_messages(cs):
-    """AFKI-W-091/W-084b: Garten ist Reflexionsraum — kein Schwarm-Sichtfenster."""
+def test_garten_profile_only_digest(cs):
+    """AFKI-W-091/W-084b/W-093: Garten ist Reflexionsraum — nur digest."""
     t = cs.default_topics("garten")
-    expected = {"kigulls/digest", "kigulls/messages/garten"}
-    assert set(t) == expected
+    assert set(t) == {"kigulls/digest"}
 
 
 def test_eule_profile(cs):

@@ -76,7 +76,11 @@ ROOM = _detect_room()
 # AFKI-W-073: per-room subscribe profiles. W-069 split publishers into
 # service/<daemon>, personas/<raum>, agents/<rolle>. This restricts each
 # room's subscription to namespaces that are useful for its purpose.
-# `kigulls/digest` and `kigulls/messages/<room>` are always added.
+# `kigulls/digest` is always added.
+# AFKI-W-093 (S317b): `kigulls/messages/<room>` removed — direct cross-persona
+# MQTT was redundant (Auftrags-Datei + Handover + personas/<raum> cover it)
+# and the topic pattern with no wildcard never matched the publisher's
+# `kigulls/messages/<from>/<to>` shape, so nobody ever consumed it.
 ROOM_ALIASES = {
     "byrd": "werkstatt",
     "reggi": "ideenschmiede",
@@ -125,7 +129,6 @@ def default_topics(room: str | None = None) -> list[str]:
     if _legacy_results_enabled():
         topics.append("kigulls/results/#")
     topics.append("kigulls/digest")
-    topics.append(f"kigulls/messages/{r}")
     return topics
 
 
