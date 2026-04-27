@@ -106,14 +106,14 @@ def test_self_echo_requires_agent_field(monkeypatch):
     assert drop is False
 
 
-# --- AFKI-W-064: KIGULLS_CHANNEL_DENY_AGENTS -------------------------------
+# --- AFKI-W-064/W-100: deny_agents kommt jetzt aus channel.yaml -------------
 
 
-def test_deny_agent_dropped_on_service_topic(monkeypatch):
+def test_deny_agent_dropped_on_service_topic(monkeypatch, write_channel_yaml):
     from kigulls_mqtt_mcp import channel_server
     channel_server._seen_keys.clear()
     monkeypatch.setattr(channel_server, "ROOM", "byrd")
-    monkeypatch.setenv("KIGULLS_CHANNEL_DENY_AGENTS", "pirol,pelikan")
+    write_channel_yaml(enabled=True, profile=["kigulls/service/#"], deny_agents=["pirol", "pelikan"])
     drop, reason = channel_server.should_drop(
         _msg("kigulls/service/pirol", {"agent": "pirol", "summary": "news"})
     )
@@ -121,11 +121,11 @@ def test_deny_agent_dropped_on_service_topic(monkeypatch):
     assert reason == "agent-deny"
 
 
-def test_deny_agent_also_applies_to_legacy_results(monkeypatch):
+def test_deny_agent_also_applies_to_legacy_results(monkeypatch, write_channel_yaml):
     from kigulls_mqtt_mcp import channel_server
     channel_server._seen_keys.clear()
     monkeypatch.setattr(channel_server, "ROOM", "byrd")
-    monkeypatch.setenv("KIGULLS_CHANNEL_DENY_AGENTS", "pirol")
+    write_channel_yaml(enabled=True, profile=[], deny_agents=["pirol"])
     drop, reason = channel_server.should_drop(
         _msg("kigulls/results/pirol", {"agent": "pirol"})
     )
@@ -133,11 +133,11 @@ def test_deny_agent_also_applies_to_legacy_results(monkeypatch):
     assert reason == "agent-deny"
 
 
-def test_deny_agent_does_not_touch_escalations(monkeypatch):
+def test_deny_agent_does_not_touch_escalations(monkeypatch, write_channel_yaml):
     from kigulls_mqtt_mcp import channel_server
     channel_server._seen_keys.clear()
     monkeypatch.setattr(channel_server, "ROOM", "byrd")
-    monkeypatch.setenv("KIGULLS_CHANNEL_DENY_AGENTS", "pirol")
+    write_channel_yaml(enabled=True, profile=[], deny_agents=["pirol"])
     # Escalations must always come through even from denied agents.
     drop, _ = channel_server.should_drop(
         _msg("kigulls/escalation/pirol", {"agent": "pirol", "severity": "high"})
@@ -145,23 +145,36 @@ def test_deny_agent_does_not_touch_escalations(monkeypatch):
     assert drop is False
 
 
-def test_deny_list_empty_is_noop(monkeypatch):
+def test_deny_list_empty_is_noop(monkeypatch, write_channel_yaml):
     from kigulls_mqtt_mcp import channel_server
     channel_server._seen_keys.clear()
     monkeypatch.setattr(channel_server, "ROOM", "byrd")
-    monkeypatch.delenv("KIGULLS_CHANNEL_DENY_AGENTS", raising=False)
+    write_channel_yaml(enabled=True, profile=[], deny_agents=[])
     drop, _ = channel_server.should_drop(
         _msg("kigulls/service/pirol", {"agent": "pirol"})
     )
     assert drop is False
 
 
-def test_deny_other_agent_still_passes(monkeypatch):
+def test_deny_other_agent_still_passes(monkeypatch, write_channel_yaml):
     from kigulls_mqtt_mcp import channel_server
     channel_server._seen_keys.clear()
     monkeypatch.setattr(channel_server, "ROOM", "byrd")
-    monkeypatch.setenv("KIGULLS_CHANNEL_DENY_AGENTS", "pirol")
+    write_channel_yaml(enabled=True, profile=[], deny_agents=["pirol"])
     drop, _ = channel_server.should_drop(
         _msg("kigulls/personas/reggi", {"agent": "reggi", "session": "S310"})
+    )
+    assert drop is False
+
+
+def test_deny_list_legacy_env_no_longer_read(monkeypatch, write_channel_yaml):
+    """AFKI-W-100: KIGULLS_CHANNEL_DENY_AGENTS-Env greift NICHT mehr."""
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    monkeypatch.setattr(channel_server, "ROOM", "byrd")
+    write_channel_yaml(enabled=True, profile=[], deny_agents=[])
+    monkeypatch.setenv("KIGULLS_CHANNEL_DENY_AGENTS", "pirol")
+    drop, _ = channel_server.should_drop(
+        _msg("kigulls/service/pirol", {"agent": "pirol"})
     )
     assert drop is False

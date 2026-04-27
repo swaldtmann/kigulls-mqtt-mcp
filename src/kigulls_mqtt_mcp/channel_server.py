@@ -8,18 +8,26 @@ Environment variables (MQTT connection — shared with main MCP):
     MQTT_HOST, MQTT_PORT, MQTT_USERNAME, MQTT_PASSWORD,
     MQTT_TRANSPORT, MQTT_WS_PATH, MQTT_USE_TLS
 
-Channel-specific:
-    KIGULLS_ROOM             — Room name, used for kigulls/messages/<room>
-                               subscription (default: "werkstatt")
-    KIGULLS_CHANNEL_TOPICS   — Comma-separated override of the default
-                               allowlist (default: results, escalation,
-                               digest, messages/<room>)
-    KIGULLS_CHANNEL_DENY_AGENTS
-                             — Comma-separated list of agent names whose
-                               result-like messages are dropped before
-                               the room sees them. Per-room scalpel on top
-                               of the W-069 topic split (e.g. Byrd does
-                               not want Pirol news firehose).
+Channel-specific (AFKI-W-100 — Persona-zentrierte Konfig via cowork/<persona>/channel.yaml):
+    KIGULLS_PERSONA          — Persona name. Used to locate channel.yaml under
+                               <KIGULLS_COWORK_ROOT|~/claudes-welt/cowork>/<persona>/.
+                               Back-Compat-Read fuer KIGULLS_ROOM erhalten.
+    KIGULLS_PERSONA_DIR      — Direktes Verzeichnis der Persona (yaml = <dir>/channel.yaml).
+    KIGULLS_PERSONA_CONFIG   — Direkter Pfad zur yaml-Datei (Override).
+    KIGULLS_COWORK_ROOT      — Wurzelverzeichnis der cowork-Personas
+                               (default: ~/claudes-welt/cowork).
+    KIGULLS_CHANNEL_TOPICS   — Comma-separated override of the subscribe list
+                               (Debug-Override, ignoriert die yaml).
+    KIGULLS_CHANNEL_LEGACY_RESULTS
+                             — "1" haengt kigulls/results/# als Notbremse an
+                               (default: "0", W-091).
+
+channel.yaml Schema:
+    enabled: bool             — false -> Channel-Server bleibt idle (kein MQTT-Connect).
+    profile: list[str]        — MQTT-Topic-Patterns zum Subscribe.
+    deny_agents: list[str]    — Agent-Namen deren Result-Messages (kigulls/results,
+                                kigulls/service, kigulls/personas, kigulls/agents)
+                                vor der Notification gedroppt werden.
 """
 
 from __future__ import annotations
@@ -31,9 +39,11 @@ import os
 import queue
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import paho.mqtt.client as mqtt
+import yaml
 from mcp.server.lowlevel import Server
 from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
@@ -47,67 +57,90 @@ except ImportError:  # pragma: no cover — fallback when redis-py is not instal
 
 from ._mqtt_client import build_client, connect_blocking
 
-KNOWN_ROOMS = {
-    "werkstatt",
-    "ideenschmiede",
-    "eule",
-    "privat",
-    "arsenal",
-    "garten",
-    "byrd",
-    "reggi",
-    "eva",
+# AFKI-W-100: Persona-zentrierte Channel-Konfig. Jede Persona haelt ihre
+# eigene `cowork/<persona>/channel.yaml` (enabled/profile/deny_agents).
+# Replaces the pre-Reform-S287 `ROOM_ALIASES`/`ROOM_PROFILES`-Hardcodes.
+#
+# Lookup-Reihenfolge fuer den Pfad zur yaml:
+#   1. KIGULLS_PERSONA_CONFIG  — direkter Pfad zur yaml-Datei
+#   2. KIGULLS_PERSONA_DIR     — Verzeichnis (yaml = <dir>/channel.yaml)
+#   3. KIGULLS_PERSONA / KIGULLS_ROOM (Back-Compat)
+#        → <KIGULLS_COWORK_ROOT|~/claudes-welt/cowork>/<persona>/channel.yaml
+#   4. cwd/channel.yaml (wenn die Persona-Session in cowork/<persona> startet)
+#
+# Ohne yaml-Datei → enabled=false, leere Profile, leere Deny-Liste. Sicher-
+# heits-Default: kein "Fallback-broad", keine versehentlichen Subscribes.
+
+_PERSONA_CONFIG_DEFAULT: dict[str, Any] = {
+    "enabled": False,
+    "profile": [],
+    "deny_agents": [],
 }
 
 
-def _detect_room() -> str:
-    env_room = os.environ.get("KIGULLS_ROOM")
-    if env_room:
-        return env_room
-    cwd_base = os.path.basename(os.getcwd())
-    if cwd_base in KNOWN_ROOMS:
-        return cwd_base
-    return "werkstatt"
+def _persona_dir() -> Path | None:
+    """Wo liegt die Persona-Config? Fresh-Read bei jedem Aufruf (Tests-friendly)."""
+    direct = os.environ.get("KIGULLS_PERSONA_CONFIG")
+    if direct:
+        p = Path(direct)
+        return p.parent if p.is_file() else None
+    env_dir = os.environ.get("KIGULLS_PERSONA_DIR")
+    if env_dir:
+        d = Path(env_dir)
+        return d if d.is_dir() else None
+    persona = os.environ.get("KIGULLS_PERSONA") or os.environ.get("KIGULLS_ROOM")
+    if persona:
+        cowork_root_env = os.environ.get("KIGULLS_COWORK_ROOT")
+        cowork_root = Path(cowork_root_env) if cowork_root_env else Path.home() / "claudes-welt" / "cowork"
+        candidate = cowork_root / persona
+        if candidate.is_dir():
+            return candidate
+    cwd = Path.cwd()
+    if (cwd / "channel.yaml").is_file():
+        return cwd
+    return None
 
 
-ROOM = _detect_room()
+def _load_persona_config(persona_dir: Path | None = None) -> dict[str, Any]:
+    """Lese cowork/<persona>/channel.yaml. Fehlende Datei -> Default (alles aus)."""
+    cfg = dict(_PERSONA_CONFIG_DEFAULT)
+    pd = persona_dir if persona_dir is not None else _persona_dir()
+    if pd is None:
+        return cfg
+    yaml_file = pd / "channel.yaml"
+    if not yaml_file.is_file():
+        return cfg
+    try:
+        with yaml_file.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+    except (OSError, yaml.YAMLError) as e:
+        print(f"[channel_server] failed to read {yaml_file}: {e}", file=sys.stderr)
+        return cfg
+    if not isinstance(data, dict):
+        return cfg
+    cfg["enabled"] = bool(data.get("enabled", False))
+    profile = data.get("profile") or []
+    if isinstance(profile, list):
+        cfg["profile"] = [str(t).strip() for t in profile if str(t).strip()]
+    deny = data.get("deny_agents") or []
+    if isinstance(deny, list):
+        cfg["deny_agents"] = [str(a).strip() for a in deny if str(a).strip()]
+    return cfg
 
 
-# AFKI-W-073: per-room subscribe profiles. W-069 split publishers into
-# service/<daemon>, personas/<raum>, agents/<rolle>. This restricts each
-# room's subscription to namespaces that are useful for its purpose.
-# `kigulls/digest` is always added.
-# AFKI-W-093 (S317b): `kigulls/messages/<room>` removed — direct cross-persona
-# MQTT was redundant (Auftrags-Datei + Handover + personas/<raum> cover it)
-# and the topic pattern with no wildcard never matched the publisher's
-# `kigulls/messages/<from>/<to>` shape, so nobody ever consumed it.
-ROOM_ALIASES = {
-    "byrd": "werkstatt",
-    "reggi": "ideenschmiede",
-    "eva": "arsenal",
-    "hanne": "privat",
-}
-ROOM_PROFILES: dict[str, list[str]] = {
-    "werkstatt":     ["kigulls/service/#", "kigulls/personas/#", "kigulls/escalation/#"],
-    "ideenschmiede": ["kigulls/personas/#", "kigulls/agents/#",   "kigulls/escalation/#", "kigulls/service/pirol", "kigulls/service/pelikan"],
-    # AFKI-W-091/W-084b (S316d): Eva (Arsenal), Privat und Garten sind
-    # Schwarm-frei — Reflexions-/Werkraeume ohne Live-Channel-Sichtfenster.
-    # zshrc startet den kigulls-mqtt-channel fuer diese Raeume nicht, der
-    # leere Profile-Eintrag haelt den Code konsistent falls jemand den
-    # Channel-Server doch manuell mit KIGULLS_ROOM=arsenal startet.
-    "arsenal":       [],
-    "privat":        [],
-    "garten":        [],
-    "eule":          ["kigulls/service/#", "kigulls/agents/#",    "kigulls/escalation/#"],
-}
-# Fallback profile for unknown rooms — keep the broad pre-W-073 behaviour
-# so a misconfigured ROOM doesn't go silent.
-_FALLBACK_PROFILE = [
-    "kigulls/service/#",
-    "kigulls/personas/#",
-    "kigulls/agents/#",
-    "kigulls/escalation/#",
-]
+def _detect_persona() -> str:
+    explicit = os.environ.get("KIGULLS_PERSONA") or os.environ.get("KIGULLS_ROOM")
+    if explicit:
+        return explicit
+    pd = _persona_dir()
+    if pd is not None:
+        return pd.name
+    return os.path.basename(os.getcwd()) or "unknown"
+
+
+PERSONA = _detect_persona()
+# Back-Compat-Alias fuer Tests/Code, der noch `ROOM` patcht.
+ROOM = PERSONA
 
 
 def _legacy_results_enabled() -> bool:
@@ -118,14 +151,20 @@ def _legacy_results_enabled() -> bool:
     return os.environ.get("KIGULLS_CHANNEL_LEGACY_RESULTS", "0") not in ("0", "false", "no")
 
 
-def default_topics(room: str | None = None) -> list[str]:
+def default_topics(persona_dir: Path | str | None = None) -> list[str]:
+    """Subscribe-Liste fuer die Persona. Override via KIGULLS_CHANNEL_TOPICS bleibt erhalten.
+
+    `persona_dir` kann fuer Tests explizit gesetzt werden; sonst wird via
+    `_persona_dir()` aus der Umgebung ermittelt.
+    """
     override = os.environ.get("KIGULLS_CHANNEL_TOPICS")
     if override:
         return [t.strip() for t in override.split(",") if t.strip()]
-    r = room if room is not None else ROOM
-    profile_key = ROOM_ALIASES.get(r, r)
-    profile = ROOM_PROFILES.get(profile_key, _FALLBACK_PROFILE)
-    topics: list[str] = list(profile)
+    pd = Path(persona_dir) if persona_dir else None
+    cfg = _load_persona_config(pd)
+    if not cfg["enabled"]:
+        return []
+    topics: list[str] = list(cfg["profile"])
     if _legacy_results_enabled():
         topics.append("kigulls/results/#")
     topics.append("kigulls/digest")
@@ -253,14 +292,14 @@ def _dedup_reset() -> None:
     _seen_keys.clear()
 
 
-def _deny_agents() -> frozenset[str]:
-    """AFKI-W-064: per-room agent deny-list for result-like topics.
+def _deny_agents(persona_dir: Path | None = None) -> frozenset[str]:
+    """AFKI-W-064/W-100: per-persona agent deny-list for result-like topics.
 
-    Read fresh on each should_drop call so test suites can flip the env
-    without reimporting. Empty list = no filtering (default).
+    Reads `cowork/<persona>/channel.yaml` (key `deny_agents`). Fresh-read on
+    every call so tests can flip the file without reimporting.
     """
-    raw = os.environ.get("KIGULLS_CHANNEL_DENY_AGENTS", "")
-    return frozenset(a.strip() for a in raw.split(",") if a.strip())
+    cfg = _load_persona_config(persona_dir)
+    return frozenset(cfg["deny_agents"])
 
 
 def should_drop(msg: mqtt.MQTTMessage) -> tuple[bool, str]:
@@ -384,8 +423,37 @@ def build_channel_params(msg: mqtt.MQTTMessage) -> dict[str, Any]:
 
 
 async def run() -> None:
-    mqtt_queue: queue.Queue[mqtt.MQTTMessage] = queue.Queue()
+    cfg = _load_persona_config()
     topics = default_topics()
+
+    server: Server = Server("kigulls-mqtt-channel")
+    caps = ServerCapabilities(experimental={"claude/channel": {}})
+    init_options = InitializationOptions(
+        server_name="kigulls-mqtt-channel",
+        server_version="0.3.1",
+        capabilities=caps,
+        instructions=(
+            "MQTT-Nachrichten vom KIgulls-Schwarm kommen als "
+            "<channel source='kigulls-mqtt-channel' topic_normalized='...'>. "
+            "Das sind Ergebnisse, Eskalationen und direkte Zettel von "
+            "parallelen Agents/Personas. Nutze das bestehende kigulls-mqtt "
+            "`publish`-Tool um zurueckzukommunizieren."
+        ),
+    )
+
+    # AFKI-W-100: enabled=false oder fehlende channel.yaml -> MCP-Server laeuft,
+    # MQTT bleibt aus. Persona ist "Schwarm-frei" (Privat, Garten, ggf. andere).
+    if not cfg["enabled"] or not topics:
+        async with stdio_server() as (read_stream, write_stream):
+            print(
+                f"[channel_server] persona={PERSONA!r} enabled={cfg['enabled']} "
+                f"topics={topics} — idling (no MQTT)",
+                file=sys.stderr, flush=True,
+            )
+            await server.run(read_stream, write_stream, init_options)
+        return
+
+    mqtt_queue: queue.Queue[mqtt.MQTTMessage] = queue.Queue()
 
     def on_connect(client: mqtt.Client, *_: object) -> None:
         for topic in topics:
@@ -394,35 +462,16 @@ async def run() -> None:
     def on_message(_c: mqtt.Client, _u: object, message: mqtt.MQTTMessage) -> None:
         mqtt_queue.put(message)
 
-    client = build_client(client_id=f"kigulls-channel-{ROOM}-{os.getpid()}")
+    client = build_client(client_id=f"kigulls-channel-{PERSONA}-{os.getpid()}")
     client.on_connect = on_connect
     client.on_message = on_message
     connect_blocking(client)
 
-    server: Server = Server("kigulls-mqtt-channel")
-
-    caps = ServerCapabilities(experimental={"claude/channel": {}})
-
     async with stdio_server() as (read_stream, write_stream):
-        init_options = InitializationOptions(
-            server_name="kigulls-mqtt-channel",
-            server_version="0.3.1",
-            capabilities=caps,
-            instructions=(
-                "MQTT-Nachrichten vom KIgulls-Schwarm kommen als "
-                "<channel source='kigulls-mqtt-channel' topic_normalized='...'>. "
-                "Das sind Ergebnisse, Eskalationen und direkte Zettel von "
-                "parallelen Agents/Raeumen. Nutze das bestehende kigulls-mqtt "
-                "`publish`-Tool um zurueckzukommunizieren."
-            ),
-        )
-
         # Start MQTT-to-notification pump: writes directly to stdio write_stream
         # as raw JSON-RPC notification. Bypasses ServerSession because the
         # pump runs outside any request context.
         async def pump() -> None:
-            import sys
-
             loop = asyncio.get_running_loop()
             while True:
                 try:

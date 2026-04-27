@@ -1,114 +1,139 @@
-"""AFKI-W-073: per-room subscribe profiles."""
+"""AFKI-W-100: Persona-Channel-Config via cowork/<persona>/channel.yaml.
+
+Loest die frueheren ROOM_PROFILES/ROOM_ALIASES (W-073) ab. Tests benutzen
+die `write_channel_yaml`-Fixture aus conftest.py, die ein temp persona dir
+mit channel.yaml anlegt und KIGULLS_PERSONA_DIR setzt.
+"""
+from __future__ import annotations
 
 import pytest
 
 
 @pytest.fixture
-def cs(monkeypatch):
-    """channel_server with KIGULLS_CHANNEL_TOPICS unset."""
-    monkeypatch.delenv("KIGULLS_CHANNEL_TOPICS", raising=False)
-    monkeypatch.delenv("KIGULLS_CHANNEL_LEGACY_RESULTS", raising=False)
+def cs():
     from kigulls_mqtt_mcp import channel_server
     return channel_server
 
 
-def test_byrd_profile(cs):
-    t = cs.default_topics("byrd")
-    assert "kigulls/service/#" in t
+def test_enabled_false_yields_no_topics(cs, write_channel_yaml):
+    """enabled=false -> Persona ist Schwarm-frei, keine Subscribes (auch kein digest)."""
+    write_channel_yaml(enabled=False, profile=["kigulls/personas/#"])
+    assert cs.default_topics() == []
+
+
+def test_enabled_true_yields_profile_plus_digest(cs, write_channel_yaml):
+    write_channel_yaml(enabled=True, profile=["kigulls/personas/#", "kigulls/escalation/#"])
+    t = cs.default_topics()
     assert "kigulls/personas/#" in t
     assert "kigulls/escalation/#" in t
-    assert "kigulls/agents/#" not in t
+    assert "kigulls/digest" in t
+    assert "kigulls/results/#" not in t  # legacy default-off (W-091)
+
+
+def test_empty_profile_with_enabled_still_subscribes_digest(cs, write_channel_yaml):
+    """enabled=true mit leerem profile -> nur digest. Sonderfall, falls jemand
+    eine Persona explizit auf "ich will nur den digest" stellt."""
+    write_channel_yaml(enabled=True, profile=[])
+    assert cs.default_topics() == ["kigulls/digest"]
+
+
+def test_missing_yaml_yields_no_topics(cs, monkeypatch, tmp_path):
+    """Persona-Dir existiert, aber keine channel.yaml -> default (enabled=false) -> []."""
+    monkeypatch.setenv("KIGULLS_PERSONA_DIR", str(tmp_path))
+    assert cs.default_topics() == []
+
+
+def test_no_persona_dir_yields_no_topics(cs, monkeypatch):
+    """Kein persona dir gefunden -> default (enabled=false) -> []."""
+    monkeypatch.delenv("KIGULLS_PERSONA_DIR", raising=False)
+    monkeypatch.delenv("KIGULLS_PERSONA", raising=False)
+    monkeypatch.delenv("KIGULLS_ROOM", raising=False)
+    monkeypatch.delenv("KIGULLS_PERSONA_CONFIG", raising=False)
+    monkeypatch.delenv("KIGULLS_COWORK_ROOT", raising=False)
+    monkeypatch.chdir("/tmp")
+    assert cs.default_topics() == []
+
+
+def test_persona_dir_argument_overrides_env(cs, tmp_path, monkeypatch):
+    """Direkt uebergebener persona_dir wird vor env benutzt — Test-Komfort."""
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "channel.yaml").write_text(
+        "enabled: true\nprofile:\n  - kigulls/foo/#\n",
+        encoding="utf-8",
+    )
+    # env zeigt woandershin
+    monkeypatch.setenv("KIGULLS_PERSONA_DIR", str(tmp_path))
+    t = cs.default_topics(other)
+    assert "kigulls/foo/#" in t
     assert "kigulls/digest" in t
 
 
-def test_werkstatt_alias_matches_byrd(cs):
-    assert set(cs.default_topics("werkstatt")) == set(cs.default_topics("byrd"))
-
-
-def test_no_room_messages_subscribe(cs):
-    """AFKI-W-093 (S317b): kigulls/messages/<room> wird nicht mehr subscribed —
-    redundant zu Auftrag/Handover/personas, und der Subscribe-Filter `messages/{r}`
-    ohne Wildcard hat den Publisher-Pfad `messages/<from>/<to>` nie gematcht."""
-    for room in ("byrd", "reggi", "eva", "privat", "garten", "eule", "unknownroom"):
-        t = cs.default_topics(room)
-        assert not any(top.startswith("kigulls/messages/") for top in t), \
-            f"messages/* subscribe leaked into {room}: {t}"
-
-
-def test_reggi_profile_includes_pirol_and_pelikan_excludes_other_service(cs):
-    """Reggi is the curator for Pirol news + Pelikan summaries; other service/* stays out.
-
-    AFKI-W-091/W-084b (S316d): Pelikan-Service kam zur expliziten Whitelist
-    dazu. Restliche Service-Daemons (Lotse, Scribe, Eule, Specht) bleiben
-    fuer Reggis Channel ausgeblendet — die geben nur Telemetrie ab, kein
-    Material fuer Lead-Reflexion.
-    """
-    t = cs.default_topics("reggi")
-    assert "kigulls/service/#" not in t
-    assert "kigulls/service/pirol" in t
-    assert "kigulls/service/pelikan" in t
-    assert "kigulls/personas/#" in t
-    assert "kigulls/agents/#" in t
-    assert "kigulls/escalation/#" in t
-
-
-def test_ideenschmiede_alias(cs):
-    """AFKI-W-093: alias and target room produce identical subscribe sets."""
-    assert set(cs.default_topics("ideenschmiede")) == set(cs.default_topics("reggi"))
-
-
-def test_eva_profile_only_digest(cs):
-    """AFKI-W-091/W-084b: Eva ist Schwarm-frei (Reflexionsraum). W-093: kein messages/* mehr."""
-    t = cs.default_topics("eva")
-    assert set(t) == {"kigulls/digest"}
-
-
-def test_privat_profile_only_digest(cs):
-    """AFKI-W-091/W-093: legacy results/# default-aus, kein messages/* — privat sieht nur digest."""
-    t = cs.default_topics("privat")
-    assert set(t) == {"kigulls/digest"}
-
-
-def test_garten_profile_only_digest(cs):
-    """AFKI-W-091/W-084b/W-093: Garten ist Reflexionsraum — nur digest."""
-    t = cs.default_topics("garten")
-    assert set(t) == {"kigulls/digest"}
-
-
-def test_eule_profile(cs):
-    t = cs.default_topics("eule")
-    assert "kigulls/service/#" in t
-    assert "kigulls/agents/#" in t
-    assert "kigulls/personas/#" not in t
-
-
-def test_unknown_room_falls_back_to_broad(cs):
-    t = cs.default_topics("unknownroom")
-    assert "kigulls/service/#" in t
-    assert "kigulls/personas/#" in t
-    assert "kigulls/agents/#" in t
-
-
-def test_env_override_wins(cs, monkeypatch):
+def test_env_override_wins_over_yaml(cs, write_channel_yaml, monkeypatch):
+    """KIGULLS_CHANNEL_TOPICS bleibt der Debug-Override und ueberschreibt yaml."""
+    write_channel_yaml(enabled=True, profile=["kigulls/personas/#"])
     monkeypatch.setenv("KIGULLS_CHANNEL_TOPICS", "kigulls/foo,kigulls/bar")
-    t = cs.default_topics("byrd")
-    assert t == ["kigulls/foo", "kigulls/bar"]
+    assert cs.default_topics() == ["kigulls/foo", "kigulls/bar"]
 
 
-def test_legacy_results_disabled_explicitly(cs, monkeypatch):
-    monkeypatch.setenv("KIGULLS_CHANNEL_LEGACY_RESULTS", "0")
-    t = cs.default_topics("byrd")
-    assert "kigulls/results/#" not in t
-
-
-def test_legacy_results_default_off(cs):
-    """AFKI-W-091: Default ist "0" — alle Publisher auf W-069-Namespaces migriert."""
-    t = cs.default_topics("byrd")
-    assert "kigulls/results/#" not in t
-
-
-def test_legacy_results_re_enabled_via_env(cs, monkeypatch):
-    """Notbremse-Pfad: Env=1 holt Legacy-Subscribe zurueck."""
+def test_legacy_results_re_enabled_via_env(cs, write_channel_yaml, monkeypatch):
+    """Notbremse-Pfad: KIGULLS_CHANNEL_LEGACY_RESULTS=1 holt Legacy-Subscribe zurueck."""
+    write_channel_yaml(enabled=True, profile=["kigulls/personas/#"])
     monkeypatch.setenv("KIGULLS_CHANNEL_LEGACY_RESULTS", "1")
-    t = cs.default_topics("byrd")
+    t = cs.default_topics()
     assert "kigulls/results/#" in t
+
+
+def test_legacy_results_default_off(cs, write_channel_yaml):
+    """AFKI-W-091: Default ist "0" — alle Publisher auf W-069-Namespaces migriert."""
+    write_channel_yaml(enabled=True, profile=["kigulls/personas/#"])
+    assert "kigulls/results/#" not in cs.default_topics()
+
+
+def test_persona_lookup_via_kigulls_persona_env(cs, tmp_path, monkeypatch):
+    """KIGULLS_PERSONA + KIGULLS_COWORK_ROOT -> persona-dir aufloesbar."""
+    cowork = tmp_path / "cowork"
+    persona = cowork / "byrd"
+    persona.mkdir(parents=True)
+    (persona / "channel.yaml").write_text(
+        "enabled: true\nprofile:\n  - kigulls/service/#\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("KIGULLS_PERSONA_DIR", raising=False)
+    monkeypatch.setenv("KIGULLS_PERSONA", "byrd")
+    monkeypatch.setenv("KIGULLS_COWORK_ROOT", str(cowork))
+    t = cs.default_topics()
+    assert "kigulls/service/#" in t
+
+
+def test_kigulls_room_back_compat(cs, tmp_path, monkeypatch):
+    """KIGULLS_ROOM (alt) wird als Back-Compat noch akzeptiert."""
+    cowork = tmp_path / "cowork"
+    persona = cowork / "byrd"
+    persona.mkdir(parents=True)
+    (persona / "channel.yaml").write_text(
+        "enabled: true\nprofile:\n  - kigulls/service/#\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("KIGULLS_PERSONA_DIR", raising=False)
+    monkeypatch.delenv("KIGULLS_PERSONA", raising=False)
+    monkeypatch.setenv("KIGULLS_ROOM", "byrd")
+    monkeypatch.setenv("KIGULLS_COWORK_ROOT", str(cowork))
+    t = cs.default_topics()
+    assert "kigulls/service/#" in t
+
+
+def test_real_byrd_yaml_loads(cs, monkeypatch):
+    """Smoke gegen die echte cowork/byrd/channel.yaml — sollte enabled=true sein."""
+    import os
+    from pathlib import Path
+    cw = Path.home() / "claudes-welt" / "cowork"
+    if not (cw / "byrd" / "channel.yaml").exists():
+        pytest.skip("cowork/byrd/channel.yaml nicht vorhanden in dieser Testumgebung")
+    monkeypatch.delenv("KIGULLS_PERSONA_DIR", raising=False)
+    monkeypatch.setenv("KIGULLS_PERSONA", "byrd")
+    monkeypatch.setenv("KIGULLS_COWORK_ROOT", str(cw))
+    t = cs.default_topics()
+    assert "kigulls/digest" in t
+    # Byrd hat ein Profil, also mehr als nur digest:
+    assert len(t) > 1
