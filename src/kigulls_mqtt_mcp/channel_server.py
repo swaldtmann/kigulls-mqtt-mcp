@@ -361,12 +361,36 @@ def _truncate_summary(text: str, max_len: int = 120) -> str:
     return text[: max_len - 3] + "..."
 
 
+_VOLLTEXT_HINT_DEFAULT = "[list_results/get_message fuer Volltext]"
+_VOLLTEXT_HINTS_BY_PREFIX = (
+    ("kigulls/results/", "[list_results/get_message fuer Volltext]"),
+    ("kigulls/personas/", "[Persona-Volltext: cowork/<persona>/, oder retained-Subscribe]"),
+    ("kigulls/inbox/", "[list_messages/get_message fuer Volltext]"),
+    ("kigulls/jobs/", "[Job im job_store, REST API]"),
+    ("kigulls/service/", "[Telemetrie — Volltext via receive/Subscribe]"),
+    ("kigulls/agents/", "[list_results/get_message fuer Volltext]"),
+)
+
+
+def _volltext_hint(topic: str) -> str:
+    """Topic-praefix-spezifischer Hinweis wo der Volltext zu finden ist.
+
+    AFKI-W-102 L1: bisher zeigte jeder Header generisch auf list_results/
+    get_message. Korrekt nur fuer kigulls/results/ und /agents/. Fuer
+    /personas/ /inbox/ /jobs/ /service/ ist der Volltext anderswo.
+    """
+    for prefix, hint in _VOLLTEXT_HINTS_BY_PREFIX:
+        if topic.startswith(prefix):
+            return hint
+    return _VOLLTEXT_HINT_DEFAULT
+
+
 def build_results_header(topic: str, parsed: dict[str, Any]) -> str:
     """Kompakte Header-Zeile fuer kigulls/results/# statt Volltext-Push.
 
     Spart Tokens in Cross-Room-Awareness: Topic, Agent, Session, erste 120ch
-    von summary/event. Volltext abrufbar via get_message/list_results im
-    kigulls-mqtt MCP.
+    von summary/event. Volltext abrufbar via topic-spezifischem Pfad
+    (siehe _volltext_hint).
     """
     agent = str(parsed.get("agent") or parsed.get("source") or "unknown")
     session = parsed.get("session")
@@ -378,7 +402,7 @@ def build_results_header(topic: str, parsed: dict[str, Any]) -> str:
         head += f" {session}"
     if summary_str:
         head += f' — "{_truncate_summary(summary_str)}"'
-    head += " [list_results/get_message fuer Volltext]"
+    head += " " + _volltext_hint(topic)
     return head
 
 

@@ -78,20 +78,38 @@ def _get_client() -> mqtt.Client:
 
 # --- MCP Tools ---
 
+_RETAINED_DEFAULT_PREFIXES = ("kigulls/personas/", "kigulls/results/")
+
+
+def _resolve_retain(topic: str, retain: bool | None) -> bool:
+    """AFKI-W-102 L2: retain=None → True fuer personas/ + results/.
+
+    Persona- und Results-Topics sollen fuer spaete Subscriber sichtbar
+    bleiben (Volltext-Pfad: retained-Subscribe oder Volltext-Lookup).
+    Wenn der Caller retain explizit setzt, gewinnt das.
+    """
+    if retain is None:
+        return topic.startswith(_RETAINED_DEFAULT_PREFIXES)
+    return retain
+
+
 @mcp.tool()
-def publish(topic: str, message: str, retain: bool = False) -> str:
+def publish(topic: str, message: str, retain: bool | None = None) -> str:
     """Publish a message to an MQTT topic.
 
     Args:
         topic: MQTT topic (e.g. kigulls/results/claude)
         message: Message payload (string or JSON)
-        retain: If true, broker stores the message for new subscribers (default: false)
+        retain: If true, broker stores the message for new subscribers.
+            Default None → True fuer kigulls/personas/* und kigulls/results/*,
+            sonst False.
     """
     try:
         client = _get_client()
-        result = client.publish(topic, message, retain=retain)
+        effective_retain = _resolve_retain(topic, retain)
+        result = client.publish(topic, message, retain=effective_retain)
         result.wait_for_publish(timeout=5)
-        return f"Published to {topic}" + (" (retained)" if retain else "")
+        return f"Published to {topic}" + (" (retained)" if effective_retain else "")
     except Exception as e:
         return f"Error: {e}"
 
