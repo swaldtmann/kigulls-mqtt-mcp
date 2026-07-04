@@ -28,6 +28,18 @@ channel.yaml Schema:
     deny_agents: list[str]    — Agent-Namen deren Result-Messages (kigulls/results,
                                 kigulls/service, kigulls/personas, kigulls/agents)
                                 vor der Notification gedroppt werden.
+    dedup: str                — "per_session" (default) dedupt Frames anhand
+                                payload_id (falls vorhanden) sonst (topic, ts);
+                                "off" schaltet die Dedup-Pruefung fuer diese
+                                Persona komplett aus (Debug-Override, AFKI-W-153).
+                                Wichtig: payload_id/(topic,ts) verbessert nur
+                                die Matching-Genauigkeit *innerhalb* des
+                                TTL-Fensters (KIGULLS_CHANNEL_DEDUP_TTL,
+                                default 1h) — verlaengert die Dedup-Garantie
+                                NICHT darueber hinaus. Zweck bleibt
+                                Reconnect-Burst-Daempfung, kein Langzeit-
+                                Content-Dedup (das deckt W-071 Publisher-
+                                seitig ab).
 """
 
 from __future__ import annotations
@@ -75,7 +87,10 @@ _PERSONA_CONFIG_DEFAULT: dict[str, Any] = {
     "enabled": False,
     "profile": [],
     "deny_agents": [],
+    "dedup": "per_session",
 }
+
+_DEDUP_MODES = ("per_session", "off")
 
 
 def _persona_dir() -> Path | None:
@@ -125,6 +140,8 @@ def _load_persona_config(persona_dir: Path | None = None) -> dict[str, Any]:
     deny = data.get("deny_agents") or []
     if isinstance(deny, list):
         cfg["deny_agents"] = [str(a).strip() for a in deny if str(a).strip()]
+    dedup = str(data.get("dedup", "per_session")).strip().lower()
+    cfg["dedup"] = dedup if dedup in _DEDUP_MODES else "per_session"
     return cfg
 
 
@@ -347,12 +364,42 @@ def should_drop(msg: mqtt.MQTTMessage) -> tuple[bool, str]:
         if deny and parsed.get("agent") in deny:
             return True, "agent-deny"
 
-    raw_key = f"{msg.topic}|{hashlib.sha256(payload_text.encode('utf-8')).hexdigest()}"
-    # Hash the composite to keep Valkey keys short + uniform.
-    key = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    # AFKI-W-153: per-persona kill switch. "off" skips the dedup check
+    # entirely (no in-memory/Valkey bookkeeping at all) — distinct from
+    # KIGULLS_CHANNEL_DEDUP_DISABLE, which only forces the Valkey backend
+    # off and keeps the in-memory reconnect-burst guard.
+    if _load_persona_config().get("dedup") == "off":
+        return False, ""
+
+    key = _frame_dedup_key(msg.topic, parsed, payload_text)
     if _dedup_check_and_mark(key):
         return True, "duplicate"
     return False, ""
+
+
+def _frame_dedup_key(topic: str, parsed: dict[str, Any], payload_text: str) -> str:
+    """Identity-Key fuer die Dedup-Pruefung (AFKI-W-153).
+
+    Bevorzugt stabile Identitaets-Felder statt des vollen Payload-Texts:
+    ein Sender-Re-Publish oder ein erneutes Broker-Offer desselben
+    retained-Frames kann Nebenfelder veraendern (z.B. einen frischen
+    Envelope-Timestamp), ohne dass sich der eigentliche Inhalt aendert.
+    Full-Payload-Hash bleibt Fallback fuer Messages ohne `payload_id`/`ts`
+    (z.B. kigulls/digest, das ueber digest_nr dedupt).
+
+    Reihenfolge: payload_id > (topic, ts) > sha256(topic + payload_text).
+    """
+    payload_id = parsed.get("payload_id")
+    if payload_id:
+        raw_key = f"{topic}|payload_id:{payload_id}"
+    else:
+        ts = parsed.get("ts")
+        if ts:
+            raw_key = f"{topic}|ts:{ts}"
+        else:
+            raw_key = f"{topic}|{hashlib.sha256(payload_text.encode('utf-8')).hexdigest()}"
+    # Hash the composite to keep Valkey keys short + uniform.
+    return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
 
 def _truncate_summary(text: str, max_len: int = 120) -> str:
