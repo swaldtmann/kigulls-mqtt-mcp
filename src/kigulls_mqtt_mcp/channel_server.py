@@ -348,6 +348,14 @@ def should_drop(msg: mqtt.MQTTMessage) -> tuple[bool, str]:
             and parsed.get("event") == "routing-decision":
         return True, "lotse routing-decision"
 
+    # CW-W-180: kigulls/alerts/# retained-Backlog flutete den Chat nach einem
+    # MQTT-Reconnect (dedup: per_session sieht den vollen Backlog erneut, auch
+    # Monate alte resolved-Alerts). Stephan-Entscheidung: Subscription bleibt,
+    # aber nur status: firing kommt durch. Vor dem Dedup-Check, damit resolved-
+    # Nachrichten gar nicht erst gegen Valkey/in-memory gebucht werden.
+    if msg.topic.startswith("kigulls/alerts/") and parsed.get("status") != "firing":
+        return True, "alert-not-firing"
+
     is_result_topic = (
         msg.topic.startswith("kigulls/results/")
         or msg.topic.startswith("kigulls/service/")
@@ -501,7 +509,7 @@ async def run() -> None:
     caps = ServerCapabilities(experimental={"claude/channel": {}})
     init_options = InitializationOptions(
         server_name="kigulls-mqtt-channel",
-        server_version="0.3.1",
+        server_version="0.3.2",
         capabilities=caps,
         instructions=(
             "MQTT-Nachrichten vom KIgulls-Schwarm kommen als "

@@ -67,6 +67,63 @@ def test_escalation_passes():
     assert drop is False
 
 
+# --- CW-W-180: kigulls/alerts/# nur status: firing durchlassen -------------
+
+
+def test_alert_resolved_dropped():
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    drop, reason = channel_server.should_drop(
+        _msg("kigulls/alerts/prod-genua-bx11-freshness", {"status": "resolved"})
+    )
+    assert drop is True
+    assert reason == "alert-not-firing"
+
+
+def test_alert_firing_passes():
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    drop, _ = channel_server.should_drop(
+        _msg("kigulls/alerts/prod-genua-bx11-freshness", {"status": "firing"})
+    )
+    assert drop is False
+
+
+def test_alert_missing_status_dropped():
+    """Kein status-Feld -> konservativ droppen, nicht durchlassen."""
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    drop, reason = channel_server.should_drop(
+        _msg("kigulls/alerts/prod-genua-bx11-freshness", {"alertname": "x"})
+    )
+    assert drop is True
+    assert reason == "alert-not-firing"
+
+
+def test_alert_firing_still_dedups_on_repeat():
+    """Firing-Alerts bleiben dem normalen Dedup unterworfen (kein Freifahrtschein)."""
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    payload = {"status": "firing", "payload_id": "alert-abc"}
+    m1 = _msg("kigulls/alerts/prod-genua-bx11-freshness", payload)
+    m2 = _msg("kigulls/alerts/prod-genua-bx11-freshness", payload)
+    drop1, _ = channel_server.should_drop(m1)
+    drop2, reason2 = channel_server.should_drop(m2)
+    assert drop1 is False
+    assert drop2 is True
+    assert "duplicate" in reason2
+
+
+def test_non_result_topic_status_field_ignored():
+    """Der status-firing-Filter gilt nur fuer kigulls/alerts/#, nicht generell."""
+    from kigulls_mqtt_mcp import channel_server
+    channel_server._seen_keys.clear()
+    drop, _ = channel_server.should_drop(
+        _msg("kigulls/results/pirol", {"agent": "pirol", "status": "resolved"})
+    )
+    assert drop is False
+
+
 def test_non_json_payload_passes():
     from kigulls_mqtt_mcp import channel_server
     channel_server._seen_keys.clear()

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-07-16
+
+### Fixed
+- **`kigulls/alerts/#` retained-Backlog flutete den Chat nach Reconnect.**
+  `dedup: per_session` sieht bei jeder neuen Session den vollen retained
+  Backlog erneut — Monate alte, laengst `resolved` Grafana-Alerts kamen als
+  einzelne `<channel>`-Bloecke rein und verdraengten den eigentlichen Chat-
+  Text (S548-Folge8, Reggi/Stephan). `should_drop()` filtert
+  `kigulls/alerts/#` jetzt vor dem Dedup-Check auf `status: firing` —
+  `resolved` und fehlendes `status`-Feld werden verworfen (Reason
+  `alert-not-firing`), ein neu `firing`-gehender Alert kommt weiterhin
+  sofort durch und unterliegt danach normal dem Dedup (kein Freifahrtschein
+  bei Wiederholung).
+
 ## [0.3.1] - 2026-04-19
 
 ### Added
