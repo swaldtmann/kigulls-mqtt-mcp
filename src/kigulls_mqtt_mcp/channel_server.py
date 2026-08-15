@@ -440,6 +440,40 @@ def _volltext_hint(topic: str) -> str:
     return _VOLLTEXT_HINT_DEFAULT
 
 
+def _stale_marker(parsed: dict[str, Any]) -> str:
+    """KIG-W-042: aged *event* frames get a visible [STALE] prefix.
+
+    Service frames declare their semantics since KIG-W-042:
+    ``frame_kind="event"`` + ``stale_after_s`` + ``ts``. A retained event
+    frame older than its horizon is history, not a current condition — a
+    3-day-old quarantine frame must not read like an open problem.
+    Surfacing only, never clearing: the frame stays (an old frame IS
+    information — "nothing ran for 3 days"), it just must not look fresh.
+    ``state`` frames and frames without the fields (pre-KIG-W-042 agents)
+    pass through unmarked.
+    """
+    if parsed.get("frame_kind") != "event":
+        return ""
+    ts_raw = parsed.get("ts")
+    stale_after = parsed.get("stale_after_s")
+    if not ts_raw or not isinstance(stale_after, (int, float)):
+        return ""
+    try:
+        ts = datetime.fromisoformat(str(ts_raw))
+    except ValueError:
+        return ""
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    age_s = (datetime.now(UTC) - ts).total_seconds()
+    if age_s <= stale_after:
+        return ""
+    if age_s >= 48 * 3600:
+        human = f"{int(age_s // 86400)}d"
+    else:
+        human = f"{int(age_s // 3600)}h"
+    return f"[STALE seit {human}] "
+
+
 def build_results_header(topic: str, parsed: dict[str, Any]) -> str:
     """Kompakte Header-Zeile fuer kigulls/results/# statt Volltext-Push.
 
@@ -456,7 +490,7 @@ def build_results_header(topic: str, parsed: dict[str, Any]) -> str:
     if session:
         head += f" {session}"
     if summary_str:
-        head += f' — "{_truncate_summary(summary_str)}"'
+        head += f' — "{_stale_marker(parsed)}{_truncate_summary(summary_str)}"'
     head += " " + _volltext_hint(topic)
     return head
 
